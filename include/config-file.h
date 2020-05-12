@@ -37,6 +37,8 @@ typedef struct Config_ {
         gchar* tenant_id;                 /**< hawkBit tenant id */
         gchar* controller_id;             /**< hawkBit controller id*/
         gchar* bundle_download_location;  /**< file to download rauc bundle to */
+        gchar* client_cert;               /**< path to the client certificate */
+        gchar* client_key;                /**< path to the key of the client certificate */
         int connect_timeout;              /**< connection timeout */
         int timeout;                      /**< reply timeout */
         int retry_wait;                   /**< wait between retries */

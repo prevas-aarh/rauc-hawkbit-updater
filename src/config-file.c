@@ -253,6 +253,8 @@ Config* load_config_file(const gchar *config_file, GError **error)
         g_autoptr(GKeyFile) ini_file = NULL;
         gboolean key_auth_token_exists = FALSE;
         gboolean key_gateway_token_exists = FALSE;
+        gboolean key_client_cert_exists = FALSE;
+        gboolean key_client_key_exists = FALSE;
 
         g_return_val_if_fail(config_file, NULL);
         g_return_val_if_fail(error == NULL || *error == NULL, NULL);
@@ -272,11 +274,14 @@ Config* load_config_file(const gchar *config_file, GError **error)
         key_gateway_token_exists = get_key_string(ini_file, "client", "gateway_token",
                                                   &config->gateway_token, NULL, NULL);
         if (!key_auth_token_exists && !key_gateway_token_exists) {
-                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_INVALID_VALUE,
-                            "Neither auth_token nor gateway_token is set in the config.");
-                return NULL;
-        }
-        if (key_auth_token_exists && key_gateway_token_exists) {
+                g_info("Neither auth_token nor gateway_token is set, using client certificates");
+                key_client_cert_exists = get_key_string(ini_file, "client", "client_cert", &config->client_cert, NULL, NULL);
+                key_client_key_exists = get_key_string(ini_file, "client", "client_key", &config->client_key, NULL, NULL);
+                if (!key_client_cert_exists || !key_client_key_exists) {
+                        g_set_error(error, 1, 4, "Neither a token nor client certificate are set!");
+                        return NULL;
+                }
+        } else if (key_auth_token_exists && key_gateway_token_exists) {
                 g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_INVALID_VALUE,
                             "Both auth_token and gateway_token are set in the config.");
                 return NULL;
@@ -334,6 +339,8 @@ void config_file_free(Config *config)
         g_free(config->tenant_id);
         g_free(config->auth_token);
         g_free(config->gateway_token);
+        g_free(config->client_cert);
+        g_free(config->client_key);
         g_free(config->bundle_download_location);
         if (config->device)
                 g_hash_table_destroy(config->device);
