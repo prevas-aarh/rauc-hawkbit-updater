@@ -61,7 +61,7 @@ test_expect_success "rauc-hawkbit-updater register and check (invalid auth token
 
 test_expect_success "rauc-hawkbit-updater register and check (no security tokens)" "
   cp $SHARNESS_TEST_DIRECTORY/test-config-no-security-tokens.conf . &&
-  echo 'Loading config file failed: Neither auth_token nor gateway_token is set in the config.' > expected_out &&
+  echo 'Loading config file failed: Neither a token nor client certificate are set!' > expected_out &&
   test_expect_code 4 rauc-hawkbit-updater -r -c $SHARNESS_TEST_DIRECTORY/test-config-no-security-tokens.conf > actual_out 2>&1 &&
   test_cmp expected_out actual_out
 "
