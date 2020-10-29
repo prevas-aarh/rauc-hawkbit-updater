@@ -63,12 +63,22 @@ enum HTTPMethod {
         DELETE
 };
 
+enum ActionState {
+        ACTION_STATE_NONE,
+        ACTION_STATE_ERROR,
+        ACTION_STATE_SUCCESS,
+        ACTION_STATE_PROCESSING,
+        ACTION_STATE_DOWNLOADING,
+        ACTION_STATE_INSTALLING,
+};
+
 /**
  * @brief struct that contains the context of an HawkBit action.
  */
 struct HawkbitAction {
         gchar *id;                    /**< HawkBit action id */
         GMutex mutex;                 /**< mutex used for accessing all other members */
+        enum ActionState state;       /**< state of this action */
 };
 
 /**
