@@ -8,3 +8,7 @@ build/
 # Backup files done by uncrustify
 .uncrustify/
 *~
+
+# tests
+venv/
+test/__pycache__/

@@ -31,6 +31,17 @@ jobs:
         make
         cd -
 
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.8
+
+    - name: Install test dependencies
+      run: |
+        sudo apt-get install libgirepository1.0-dev python3-virtualenv
+        python -m pip install --upgrade pip
+        pip install -r test-requirements.txt
+
     - name: Login to DockerHub
       uses: docker/login-action@v1
       if: github.ref == 'refs/heads/master'
@@ -46,7 +57,7 @@ jobs:
     - name: Run test suite
       run: |
         ./test/wait-for-hawkbit-online
-        cd test && ./rauc-hawkbit-updater.t -v
+        dbus-run-session -- pytest -v
 
   docs:
     runs-on: ubuntu-latest

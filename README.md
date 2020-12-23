@@ -81,8 +81,35 @@ Compile
   cd build
   cmake ..
   make
+  cd ..
 ```
 
+Test Suite
+----------
+
+Prepare test suite:
+
+```shell
+virtualenv -p python3 venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r test-requirements.txt
+```
+
+Run hawkBit docker container:
+
+```shell
+docker pull hawkbit/hawkbit-update-server
+docker run -d --name hawkbit -p 8080:8080 hawkbit/hawkbit-update-server
+```
+
+Run test suite:
+
+```shell
+./test/wait-for-hawkbit-online && dbus-run-session -- pytest -v
+```
+
+Pass `-o log_cli=true` to pytest in order to enable live logging for all test cases.
 
 Usage / options
 ---------------
