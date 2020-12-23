@@ -604,6 +604,15 @@ static long json_get_sleeptime(JsonNode *root)
 
         g_return_val_if_fail(root, 0L);
 
+        g_mutex_lock(&active_action->mutex);
+        if (active_action->state == ACTION_STATE_PROCESSING ||
+            active_action->state == ACTION_STATE_DOWNLOADING ||
+            active_action->state == ACTION_STATE_CANCEL_REQUESTED) {
+                g_mutex_unlock(&active_action->mutex);
+                return 5L;
+        }
+        g_mutex_unlock(&active_action->mutex);
+
         sleeptime_str = json_get_string(root, "$.config.polling.sleep", &error);
         if (!sleeptime_str) {
                 g_warning("Polling sleep time not found: %s. Using fallback: %ds",
@@ -1121,9 +1130,6 @@ static gboolean hawkbit_pull_cb(gpointer user_data)
         // owned by the JsonParser and should never be modified or freed
         json_root = json_parser_get_root(json_response_parser);
 
-        // get hawkbit sleep time (how often should we check for new software)
-        data->hawkbit_interval_check_sec = json_get_sleeptime(json_root);
-
         if (json_contains(json_root, "$._links.configData")) {
                 // hawkBit has asked us to identify ourselves
                 res = identify(&error);
@@ -1154,6 +1160,9 @@ static gboolean hawkbit_pull_cb(gpointer user_data)
                         g_clear_error(&error);
                 }
         }
+
+        // get hawkbit sleep time (how often should we check for new software)
+        data->hawkbit_interval_check_sec = json_get_sleeptime(json_root);
 
 out:
         if (run_once) {
