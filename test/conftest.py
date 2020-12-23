@@ -1,9 +1,11 @@
 import os
+import sys
 from configparser import ConfigParser
 
 import pytest
 
 from hawkbit import HawkbitMgmtTestClient, HawkbitError
+from helper import run_pexpect
 
 def pytest_addoption(parser):
     """Register custom argparse-style options."""
@@ -99,3 +101,63 @@ def adjust_config(config):
         return config
 
     return _adjust_config
+
+@pytest.fixture(scope='session')
+def rauc_bundle(tmp_path_factory):
+    """Creates a temporary 512 KB file to be used as a dummy RAUC bundle."""
+    bundle = tmp_path_factory.mktemp('data') / 'bundle.raucb'
+    bundle.write_bytes(os.urandom(512)*1024)
+    return str(bundle)
+
+@pytest.fixture
+def bundle_assigned(hawkbit, hawkbit_target_added, rauc_bundle):
+    """
+    Creates a softwaremodule containing the file from the rauc_bundle fixture as an artifact.
+    Creates a distributionset from this softwaremodule. Assigns this distributionset to the target
+    created by the hawkbit_target_added fixture. Returns the corresponding action ID of this
+    assignment.
+    """
+    swmodule = hawkbit.add_softwaremodule()
+    artifact = hawkbit.add_artifact(rauc_bundle, swmodule)
+    distributionset = hawkbit.add_distributionset(swmodule)
+    action = hawkbit.assign_target(distributionset)
+
+    yield action
+
+    try:
+        hawkbit.cancel_action(action, hawkbit_target_added, force=True)
+    except HawkbitError:
+        pass
+
+    hawkbit.delete_distributionset(distributionset)
+    hawkbit.delete_artifact(artifact, swmodule)
+    hawkbit.delete_softwaremodule(swmodule)
+
+@pytest.fixture
+def rauc_dbus_install_success(rauc_bundle):
+    """
+    Creates a RAUC D-Bus dummy interface on the SessionBus mimicing a successful installation on
+    Install().
+    """
+    proc = run_pexpect(f'{sys.executable} -m rauc_dbus_dummy {rauc_bundle}', cwd='test')
+    proc.expect('Interface published')
+
+    yield
+
+    assert proc.isalive()
+    proc.terminate()
+
+@pytest.fixture
+def rauc_dbus_install_failure(rauc_bundle):
+    """
+    Creates a RAUC D-Bus dummy interface on the SessionBus mimicing a failing installation on
+    Install().
+    """
+    proc = run_pexpect(f'{sys.executable} -m rauc_dbus_dummy {rauc_bundle} --completed-code=1',
+                       cwd='test', timeout=None)
+    proc.expect('Interface published')
+
+    yield
+
+    assert proc.isalive()
+    proc.terminate(force=True)

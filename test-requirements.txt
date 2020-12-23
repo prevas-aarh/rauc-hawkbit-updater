@@ -3,3 +3,4 @@ attrs
 requests
 pydbus
 pygobject
+pexpect
