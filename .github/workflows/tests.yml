@@ -38,7 +38,7 @@ jobs:
 
     - name: Install test dependencies
       run: |
-        sudo apt-get install libgirepository1.0-dev python3-virtualenv
+        sudo apt-get install libgirepository1.0-dev python3-virtualenv nginx-full
         python -m pip install --upgrade pip
         pip install -r test-requirements.txt
 

@@ -2,6 +2,8 @@ import os
 import subprocess
 import shlex
 import logging
+import socket
+from contextlib import closing
 
 
 class PExpectLogger:
@@ -72,3 +74,10 @@ def run(command, *, timeout=30):
     logger.info('exitcode: %d', proc.returncode)
 
     return proc.stdout, proc.stderr, proc.returncode
+
+def available_port():
+    """Returns an available local port."""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.bind(('localhost', 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return sock.getsockname()[1]

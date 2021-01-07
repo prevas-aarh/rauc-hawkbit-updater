@@ -5,7 +5,7 @@ from configparser import ConfigParser
 import pytest
 
 from hawkbit import HawkbitMgmtTestClient, HawkbitError
-from helper import run_pexpect
+from helper import run_pexpect, available_port
 
 def pytest_addoption(parser):
     """Register custom argparse-style options."""
@@ -161,3 +161,97 @@ def rauc_dbus_install_failure(rauc_bundle):
 
     assert proc.isalive()
     proc.terminate(force=True)
+
+@pytest.fixture(scope='session')
+def nginx_config(tmp_path_factory):
+    """
+    Creates a temporary nginx proxy configuration incorporating additional given options to the
+    location section.
+    """
+    config_template = """
+daemon off;
+pid /tmp/hawkbit-nginx-{port}.pid;
+
+# non-fatal alert for /var/log/nginx/error.log will still be shown
+# https://trac.nginx.org/nginx/ticket/147
+error_log stderr notice;
+
+events {{ }}
+
+http {{
+    access_log /dev/null;
+
+    server {{
+        listen {port};
+
+        location / {{
+            proxy_pass http://localhost:8080;
+            {location_options}
+
+            # use proxy URL in JSON responses
+            sub_filter "localhost:$proxy_port/" "$host:$server_port/";
+            sub_filter "$host:$proxy_port/" "$host:$server_port/";
+            sub_filter_types application/json;
+            sub_filter_once off;
+        }}
+    }}
+}}"""
+
+    def _nginx_config(port, location_options):
+        proxy_config = tmp_path_factory.mktemp('nginx') / 'nginx.conf'
+        location_options = ( f'{key} {value};' for key, value in location_options.items())
+        proxy_config_str = config_template.format(port=port, location_options=" ".join(location_options))
+        proxy_config.write_text(proxy_config_str)
+        return proxy_config
+
+    return _nginx_config
+
+@pytest.fixture(scope='session')
+def nginx_proxy(nginx_config):
+    """
+    Runs an nginx rate liming proxy, limiting download speeds to 70 KB/s. HTTP requests are
+    forwarded to port 8080 (default port of the docker hawkBit instance). Returns the port the
+    proxy is running on. This port can be set in the rauc-hawkbit-updater config to rate limit its
+    HTTP requests.
+    """
+    import pexpect
+
+    procs = []
+
+    def _nginx_proxy(options):
+        port = available_port()
+        proxy_config = nginx_config(port, options)
+
+        try:
+            proc = run_pexpect(f'nginx -c {proxy_config} -p .', timeout=None)
+        except (pexpect.exceptions.EOF, pexpect.exceptions.ExceptionPexpect):
+            pytest.skip('nginx unavailable')
+
+        try:
+            proc.expect('start worker process ')
+        except pexpect.exceptions.EOF:
+            pytest.skip('nginx failed, use -s to see logs')
+
+        procs.append(proc)
+
+        return port
+
+    yield _nginx_proxy
+
+    for proc in procs:
+        assert proc.isalive()
+        proc.terminate(force=True)
+
+@pytest.fixture(scope='session')
+def rate_limited_port(nginx_proxy):
+    """
+    Runs an nginx rate liming proxy, limiting download speeds to 70 KB/s. HTTP requests are
+    forwarded to port 8080 (default port of the docker hawkBit instance). Returns the port the
+    proxy is running on. This port can be set in the rauc-hawkbit-updater config to rate limit its
+    HTTP requests.
+    """
+    def _rate_limited_port(rate):
+        location_options = {'proxy_limit_rate': rate}
+        return nginx_proxy(location_options)
+
+    return _rate_limited_port
