@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.0.2)
 project( rauc-hawkbit-updater )
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 option(WITH_SYSTEMD "Set to ON to create unit files and enable systemd startup"  OFF)
 option(BUILD_DOC    "Build documentation" OFF)
 option(QA_BUILD     "QA build (pedantic, with fatal errors)" OFF)
@@ -107,6 +109,12 @@ add_custom_command(
 		COMMAND mv ${CODEGEN_PREFIX}.c ${CMAKE_CURRENT_SOURCE_DIR}/src/
 		COMMAND mv ${CODEGEN_PREFIX}.h ${CMAKE_CURRENT_SOURCE_DIR}/include/
 )
+
+include(GetGitRevisionDescription)
+git_describe(VERSION_GIT)
+set(VERSION_GIT_FULL "${VERSION_GIT}")
+
+add_definitions( -DPROJECT_VERSION="${VERSION_GIT}" )
 
 set(RAUC_HAWKBIT_SRCS
 		${RAUC_HAWKBIT_SRCS}

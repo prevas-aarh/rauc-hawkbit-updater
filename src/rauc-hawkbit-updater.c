@@ -34,7 +34,6 @@
 #include "log.h"
 
 #define PROGRAM "rauc-hawkbit-updater"
-#define VERSION 0.1
 
 // program arguments
 static gchar *config_file          = NULL;
@@ -150,7 +149,7 @@ int main(int argc, char **argv)
         }
 
         if (opt_version) {
-                g_printf("Version %.1f\n", VERSION);
+                g_printf("Version %s\n", PROJECT_VERSION);
                 return 0;
         }
 
