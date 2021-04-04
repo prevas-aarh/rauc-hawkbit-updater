@@ -33,6 +33,9 @@ include_directories(${GIOUNIX_INCLUDE_DIRS})
 pkg_check_modules(JSONGLIB REQUIRED json-glib-1.0)
 include_directories(${JSONGLIB_INCLUDE_DIRS})
 
+pkg_check_modules(ECONF REQUIRED libeconf)
+include_directories(${ECONF_INCLUDE_DIRS})
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if (BUILD_DOC)
@@ -120,7 +123,7 @@ if (QA_BUILD)
 endif (QA_BUILD)
 
 target_link_libraries( rauc-hawkbit-updater LINK_PUBLIC ${GIO_LIBRARIES}
-                       ${JSONGLIB_LIBRARIES} ${CURL_LIBRARIES} ${SYSTEMD_LIBRARIES})
+                       ${JSONGLIB_LIBRARIES} ${CURL_LIBRARIES} ${SYSTEMD_LIBRARIES} ${ECONF_LIBRARIES})
 install (TARGETS rauc-hawkbit-updater DESTINATION /usr/bin/)
 
 if (WITH_SYSTEMD)
