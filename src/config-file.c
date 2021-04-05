@@ -286,8 +286,6 @@ Config* load_config_file(const gchar *config_file, GError **error)
         if (!get_key_bool(ini_file, "client", "ssl_verify", &config->ssl_verify,
                           DEFAULT_SSL_VERIFY, error))
                 return NULL;
-        if (!get_group(ini_file, "device", &config->device, error))
-                return NULL;
         if (!get_key_int(ini_file, "client", "connect_timeout", &config->connect_timeout,
                          DEFAULT_CONNECTTIMEOUT, error))
                 return NULL;
@@ -311,6 +309,9 @@ Config* load_config_file(const gchar *config_file, GError **error)
                             config->timeout, config->connect_timeout);
                 return NULL;
         }
+
+        if (!get_group(ini_file, "device", &config->device, error))
+                return NULL;
 
         return g_steal_pointer(&config);
 }
