@@ -34,6 +34,20 @@ def test_config_file_non_existent():
     assert out == ''
     assert err.strip() == 'No such configuration file: does-not-exist.conf'
 
+def test_config_trailing_spaces(config):
+    """Test if trailing spaces after config options are ignored."""
+    # add trailing spaces to all lines in config
+    with open(config) as f:
+        lines = [line[:-1] + ' \n' for line in f.readlines()]
+    with open(config, 'w') as f:
+        f.writelines(lines)
+
+    out, err, exitcode = run(f'rauc-hawkbit-updater -c "{config}" -r')
+
+    assert exitcode == 0
+    assert 'MESSAGE: Checking for new software...' in out
+    assert err == ''
+
 def test_config_no_auth_token(adjust_config):
     """Test config without auth_token option in client section."""
     config = adjust_config(remove={'client': 'auth_token'})
