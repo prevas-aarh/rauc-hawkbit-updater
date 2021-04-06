@@ -18,14 +18,6 @@ def test_invalid_arg():
     assert out == ''
     assert err.strip() == 'option parsing failed: Unknown option --invalidarg'
 
-def test_config_unspecified():
-    """Test call without config argument."""
-    out, err, exitcode = run('rauc-hawkbit-updater')
-
-    assert exitcode == 2
-    assert out == ''
-    assert err.strip() == 'No configuration file given'
-
 def test_config_file_non_existent():
     """Test call with inexistent config file."""
     out, err, exitcode = run('rauc-hawkbit-updater -c does-not-exist.conf')
