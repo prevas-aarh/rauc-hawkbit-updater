@@ -34,6 +34,7 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(econf_file, econf_freeFile)
 
 static const gchar *CONFIG_DELIMITER      = "=";
 static const gchar *CONFIG_COMMENT        = "#";
+static const gchar *CONFIG_EXTENSION      = "conf";
 static const gint DEFAULT_CONNECTTIMEOUT  = 20;     // 20 sec.
 static const gint DEFAULT_TIMEOUT         = 60;     // 1 min.
 static const gint DEFAULT_RETRY_WAIT      = 5 * 60; // 5 min.
@@ -233,6 +234,60 @@ static GLogLevelFlags log_level_from_string(const gchar *log_level)
         }
 }
 
+static gboolean parse_default_config_locations(econf_file **key_file, GError **error)
+{
+        g_autoptr(econf_file) etc_run_config = NULL;
+        g_autoptr(econf_file) usr_config = NULL;
+        econf_err econf_error;
+
+        g_return_val_if_fail(key_file && *key_file == NULL, FALSE);
+        g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+        // files /etc/ take precedence over those in /run/
+        econf_error = econf_readDirs(&etc_run_config, "/run/rauc-hawkbit-updater",
+                                     "/etc/rauc-hawkbit-updater", "rauc-hawkbit-updater",
+                                     CONFIG_EXTENSION, CONFIG_DELIMITER, CONFIG_COMMENT);
+        if (econf_error && econf_error != ECONF_NOFILE) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                            "Failed reading config locations /run, /etc: %s",
+                            econf_errString(econf_error));
+                return FALSE;
+        }
+
+        // consider files in /usr/lib/
+        econf_error = econf_readDirs(&usr_config, "/usr/lib/rauc-hawkbit-updater", NULL,
+                                     "rauc-hawkbit-updater", CONFIG_EXTENSION, CONFIG_DELIMITER,
+                                     CONFIG_COMMENT);
+        if (econf_error && econf_error != ECONF_NOFILE) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                            "Failed reading config location /usr: %s",
+                            econf_errString(econf_error));
+                return FALSE;
+        }
+
+        // consider valid key files
+        if (!etc_run_config && !usr_config) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE, "No config files found");
+                return FALSE;
+        }
+        if (etc_run_config && !usr_config)
+                *key_file = g_steal_pointer(&etc_run_config);
+        if (!etc_run_config && usr_config)
+                *key_file = g_steal_pointer(&usr_config);
+        if (etc_run_config && usr_config) {
+                // files in /etc/ and /run/ (parsed above) take precedence over those in /usr/lib/
+                econf_error = econf_mergeFiles(key_file, usr_config, etc_run_config);
+                if (econf_error) {
+                        g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                                    "Failed merging config locations: %s",
+                                    econf_errString(econf_error));
+                        return FALSE;
+                }
+        }
+
+        return TRUE;
+}
+
 Config* load_config_file(const gchar *config_file, GError **error)
 {
         g_autoptr(Config) config = NULL;
@@ -242,16 +297,21 @@ Config* load_config_file(const gchar *config_file, GError **error)
         gboolean key_gateway_token_exists = FALSE;
         econf_err econf_error;
 
-        g_return_val_if_fail(config_file, NULL);
         g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
         config = g_new0(Config, 1);
 
-        econf_error = econf_readFile(&ini_file, config_file, CONFIG_DELIMITER, CONFIG_COMMENT);
-        if (econf_error) {
-                g_set_error_literal(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
-                                    econf_errString(econf_error));
-                return NULL;
+        if (config_file) {
+                econf_error = econf_readFile(&ini_file, config_file, CONFIG_DELIMITER,
+                                             CONFIG_COMMENT);
+                if (econf_error) {
+                        g_set_error_literal(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                                            econf_errString(econf_error));
+                        return NULL;
+                }
+        } else {
+                if (!parse_default_config_locations(&ini_file, error))
+                        return NULL;
         }
 
         if (!get_key_string(ini_file, "client", "hawkbit_server", &config->hawkbit_server, NULL,

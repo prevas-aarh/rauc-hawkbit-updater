@@ -47,7 +47,8 @@ typedef struct Config_ {
 /**
  * @brief Get Config for config_file.
  *
- * @param[in]  config_file String value containing path to config file
+ * @param[in]  config_file String value containing path to config file or NULL to search in default
+ *                         locations
  * @param[out] error       Error
  * @return Config on success, NULL otherwise (error is set)
  */
