@@ -155,12 +155,7 @@ int main(int argc, char **argv)
                 return 0;
         }
 
-        if (!config_file) {
-                g_printerr("No configuration file given\n");
-                return 2;
-        }
-
-        if (!g_file_test(config_file, G_FILE_TEST_EXISTS)) {
+        if (config_file && !g_file_test(config_file, G_FILE_TEST_EXISTS)) {
                 g_printerr("No such configuration file: %s\n", config_file);
                 return 3;
         }

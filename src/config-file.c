@@ -27,8 +27,14 @@
 #include "config-file.h"
 #include <glib/gtypes.h>
 #include <stdlib.h>
+#include <libeconf.h>
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(econf_file, econf_freeFile)
 
 
+static const gchar *CONFIG_DELIMITER      = "=";
+static const gchar *CONFIG_COMMENT        = "#";
+static const gchar *CONFIG_EXTENSION      = "conf";
 static const gint DEFAULT_CONNECTTIMEOUT  = 20;     // 20 sec.
 static const gint DEFAULT_TIMEOUT         = 60;     // 1 min.
 static const gint DEFAULT_RETRY_WAIT      = 5 * 60; // 5 min.
@@ -41,7 +47,7 @@ static const gchar* DEFAULT_LOG_LEVEL     = "message";
  * @brief Get string value from key_file for key in group, optional default_value can be specified
  * that will be used in case key is not found in group.
  *
- * @param[in]  key_file      GKeyFile to look value up
+ * @param[in]  key_file      econf_file to look value up
  * @param[in]  group         A group name
  * @param[in]  key           A key
  * @param[out] value         Output string value
@@ -50,10 +56,11 @@ static const gchar* DEFAULT_LOG_LEVEL     = "message";
  * @param[out] error         Error
  * @return TRUE if found, TRUE if not found and default_value given, FALSE otherwise (error is set)
  */
-static gboolean get_key_string(GKeyFile *key_file, const gchar *group, const gchar *key,
+static gboolean get_key_string(econf_file *key_file, const gchar *group, const gchar *key,
                                gchar **value, const gchar *default_value, GError **error)
 {
-        g_autofree gchar *val = NULL;
+        g_autofree gchar *default_nonconst = g_strdup(default_value);
+        econf_err econf_error;
 
         g_return_val_if_fail(key_file, FALSE);
         g_return_val_if_fail(group, FALSE);
@@ -61,26 +68,27 @@ static gboolean get_key_string(GKeyFile *key_file, const gchar *group, const gch
         g_return_val_if_fail(value && *value == NULL, FALSE);
         g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-        val = g_key_file_get_string(key_file, group, key, error);
-        if (!val) {
-                if (default_value) {
-                        *value = g_strdup(default_value);
-                        g_clear_error(error);
-                        return TRUE;
-                }
+        if (default_value)
+                econf_error = econf_getStringValueDef(key_file, group, key, value,
+                                                      default_nonconst);
+        else
+                econf_error = econf_getStringValue(key_file, group, key, value);
 
-                return FALSE;
-        }
+        if (!econf_error)
+                return TRUE;
+        if (default_value && econf_error == ECONF_NOKEY)
+                return TRUE;
 
-        *value = g_steal_pointer(&val);
-        return TRUE;
+        g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                    "Key '%s' (string, group '%s'): %s", key, group, econf_errString(econf_error));
+        return FALSE;
 }
 
 /**
  * @brief Get gboolean value from key_file for key in group, default_value must be specified,
  * returned in case key not found in group.
  *
- * @param[in]  key_file      GKeyFile to look value up
+ * @param[in]  key_file      econf_file to look value up
  * @param[in]  group         A group name
  * @param[in]  key           A key
  * @param[out] value         Output gboolean value
@@ -89,10 +97,10 @@ static gboolean get_key_string(GKeyFile *key_file, const gchar *group, const gch
  * @return FALSE on error (error is set), TRUE otherwise. Note that TRUE is returned if key in
  *         group is not found, value is set to default_value in this case.
  */
-static gboolean get_key_bool(GKeyFile *key_file, const gchar *group, const gchar *key,
+static gboolean get_key_bool(econf_file *key_file, const gchar *group, const gchar *key,
                              gboolean *value, const gboolean default_value, GError **error)
 {
-        g_autofree gchar *val = NULL;
+        econf_err econf_error;
 
         g_return_val_if_fail(key_file, FALSE);
         g_return_val_if_fail(group, FALSE);
@@ -100,36 +108,22 @@ static gboolean get_key_bool(GKeyFile *key_file, const gchar *group, const gchar
         g_return_val_if_fail(value, FALSE);
         g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-        val = g_key_file_get_string(key_file, group, key, NULL);
-        if (!val) {
-                *value = default_value;
-                return TRUE;
+        econf_error = econf_getBoolValueDef(key_file, group, key, (bool *)value, default_value);
+        if (econf_error && econf_error != ECONF_NOKEY) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                            "Key '%s' (bool, group '%s'): %s", key, group,
+                            econf_errString(econf_error));
+                return FALSE;
         }
 
-        if (g_strcmp0(val, "0") == 0 || g_ascii_strcasecmp(val, "no") == 0 ||
-            g_ascii_strcasecmp(val, "false") == 0) {
-                *value = FALSE;
-                return TRUE;
-        }
-
-        if (g_strcmp0(val, "1") == 0 || g_ascii_strcasecmp(val, "yes") == 0 ||
-            g_ascii_strcasecmp(val, "true") == 0) {
-                *value = TRUE;
-                return TRUE;
-        }
-
-        g_set_error(error, G_KEY_FILE_ERROR,
-                    G_KEY_FILE_ERROR_INVALID_VALUE,
-                    "Value '%s' cannot be interpreted as a boolean.", val);
-
-        return FALSE;
+        return TRUE;
 }
 
 /**
  * @brief Get integer value from key_file for key in group, default_value must be specified,
  * returned in case key not found in group.
  *
- * @param[in]  key_file      GKeyFile to look value up
+ * @param[in]  key_file      econf_file to look value up
  * @param[in]  group         A group name
  * @param[in]  key           A key
  * @param[out] value         Output integer value
@@ -138,11 +132,10 @@ static gboolean get_key_bool(GKeyFile *key_file, const gchar *group, const gchar
  * @return FALSE on error (error is set), TRUE otherwise. Note that TRUE is returned if key in
  *         group is not found, value is set to default_value in this case.
  */
-static gboolean get_key_int(GKeyFile *key_file, const gchar *group, const gchar *key, gint *value,
-                            const gint default_value, GError **error)
+static gboolean get_key_int(econf_file *key_file, const gchar *group, const gchar *key,
+                            gint *value, const gint default_value, GError **error)
 {
-        GError *ierror = NULL;
-        gint val;
+        econf_err econf_error;
 
         g_return_val_if_fail(key_file, FALSE);
         g_return_val_if_fail(group, FALSE);
@@ -150,38 +143,34 @@ static gboolean get_key_int(GKeyFile *key_file, const gchar *group, const gchar 
         g_return_val_if_fail(value, FALSE);
         g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-        val = g_key_file_get_integer(key_file, group, key, &ierror);
-
-        if (g_error_matches(ierror, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_KEY_NOT_FOUND)) {
-                g_clear_error(&ierror);
-                *value = default_value;
-                return TRUE;
-        } else if (ierror) {
-                g_propagate_error(error, ierror);
+        econf_error = econf_getIntValueDef(key_file, group, key, value, default_value);
+        if (econf_error && econf_error != ECONF_NOKEY) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                            "Key '%s' (int, group '%s'): %s", key, group,
+                            econf_errString(econf_error));
                 return FALSE;
         }
 
-        *value = val;
         return TRUE;
 }
 
 /**
  * @brief Get GHashTable containing keys/values from group in key_file.
  *
- * @param[in]  key_file GKeyFile to look value up
+ * @param[in]  key_file econf_file to look value up
  * @param[in]  group    A group name
  * @param[out] hash     Output GHashTable
  * @param[out] error    Error
  * @return TRUE on keys/values stored successfully, FALSE on empty group/value or on other errors
  *         (error set)
  */
-static gboolean get_group(GKeyFile *key_file, const gchar *group, GHashTable **hash,
+static gboolean get_group(econf_file *key_file, const gchar *group, GHashTable **hash,
                           GError **error)
 {
         g_autoptr(GHashTable) tmp_hash = NULL;
-        guint key;
-        gsize num_keys;
+        size_t key, num_keys = 0;
         g_auto(GStrv) keys = NULL;
+        econf_err econf_error;
 
         g_return_val_if_fail(key_file, FALSE);
         g_return_val_if_fail(group, FALSE);
@@ -189,22 +178,21 @@ static gboolean get_group(GKeyFile *key_file, const gchar *group, GHashTable **h
         g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
         tmp_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
-        keys = g_key_file_get_keys(key_file, group, &num_keys, error);
-        if (!keys)
-                return FALSE;
 
-        if (!num_keys) {
+        econf_error = econf_getKeys(key_file, group, &num_keys, &keys);
+        if (econf_error) {
                 g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
-                            "Group '%s' has no keys set", group);
+                            "Enumerating keys in group '%s' failed: %s", group,
+                            econf_errString(econf_error));
                 return FALSE;
         }
 
         for (key = 0; key < num_keys; key++) {
-                g_autofree gchar *value = g_key_file_get_value(key_file, group, keys[key], error);
-                if (!value)
+                gchar *value = NULL;
+                if (!get_key_string(key_file, group, keys[key], &value, NULL, error))
                         return FALSE;
 
-                g_hash_table_insert(tmp_hash, g_strdup(keys[key]), g_steal_pointer(&value));
+                g_hash_table_insert(tmp_hash, g_strdup(keys[key]), value);
         }
 
         *hash = g_steal_pointer(&tmp_hash);
@@ -246,22 +234,85 @@ static GLogLevelFlags log_level_from_string(const gchar *log_level)
         }
 }
 
+static gboolean parse_default_config_locations(econf_file **key_file, GError **error)
+{
+        g_autoptr(econf_file) etc_run_config = NULL;
+        g_autoptr(econf_file) usr_config = NULL;
+        econf_err econf_error;
+
+        g_return_val_if_fail(key_file && *key_file == NULL, FALSE);
+        g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+        // files /etc/ take precedence over those in /run/
+        econf_error = econf_readDirs(&etc_run_config, "/run/rauc-hawkbit-updater",
+                                     "/etc/rauc-hawkbit-updater", "rauc-hawkbit-updater",
+                                     CONFIG_EXTENSION, CONFIG_DELIMITER, CONFIG_COMMENT);
+        if (econf_error && econf_error != ECONF_NOFILE) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                            "Failed reading config locations /run, /etc: %s",
+                            econf_errString(econf_error));
+                return FALSE;
+        }
+
+        // consider files in /usr/lib/
+        econf_error = econf_readDirs(&usr_config, "/usr/lib/rauc-hawkbit-updater", NULL,
+                                     "rauc-hawkbit-updater", CONFIG_EXTENSION, CONFIG_DELIMITER,
+                                     CONFIG_COMMENT);
+        if (econf_error && econf_error != ECONF_NOFILE) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                            "Failed reading config location /usr: %s",
+                            econf_errString(econf_error));
+                return FALSE;
+        }
+
+        // consider valid key files
+        if (!etc_run_config && !usr_config) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE, "No config files found");
+                return FALSE;
+        }
+        if (etc_run_config && !usr_config)
+                *key_file = g_steal_pointer(&etc_run_config);
+        if (!etc_run_config && usr_config)
+                *key_file = g_steal_pointer(&usr_config);
+        if (etc_run_config && usr_config) {
+                // files in /etc/ and /run/ (parsed above) take precedence over those in /usr/lib/
+                econf_error = econf_mergeFiles(key_file, usr_config, etc_run_config);
+                if (econf_error) {
+                        g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                                    "Failed merging config locations: %s",
+                                    econf_errString(econf_error));
+                        return FALSE;
+                }
+        }
+
+        return TRUE;
+}
+
 Config* load_config_file(const gchar *config_file, GError **error)
 {
         g_autoptr(Config) config = NULL;
         g_autofree gchar *val = NULL;
-        g_autoptr(GKeyFile) ini_file = NULL;
+        g_autoptr(econf_file) ini_file = NULL;
         gboolean key_auth_token_exists = FALSE;
         gboolean key_gateway_token_exists = FALSE;
+        econf_err econf_error;
 
-        g_return_val_if_fail(config_file, NULL);
         g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
         config = g_new0(Config, 1);
-        ini_file = g_key_file_new();
 
-        if (!g_key_file_load_from_file(ini_file, config_file, G_KEY_FILE_NONE, error))
-                return NULL;
+        if (config_file) {
+                econf_error = econf_readFile(&ini_file, config_file, CONFIG_DELIMITER,
+                                             CONFIG_COMMENT);
+                if (econf_error) {
+                        g_set_error_literal(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_PARSE,
+                                            econf_errString(econf_error));
+                        return NULL;
+                }
+        } else {
+                if (!parse_default_config_locations(&ini_file, error))
+                        return NULL;
+        }
 
         if (!get_key_string(ini_file, "client", "hawkbit_server", &config->hawkbit_server, NULL,
                             error))
@@ -295,8 +346,6 @@ Config* load_config_file(const gchar *config_file, GError **error)
         if (!get_key_bool(ini_file, "client", "ssl_verify", &config->ssl_verify,
                           DEFAULT_SSL_VERIFY, error))
                 return NULL;
-        if (!get_group(ini_file, "device", &config->device, error))
-                return NULL;
         if (!get_key_int(ini_file, "client", "connect_timeout", &config->connect_timeout,
                          DEFAULT_CONNECTTIMEOUT, error))
                 return NULL;
@@ -320,6 +369,9 @@ Config* load_config_file(const gchar *config_file, GError **error)
                             config->timeout, config->connect_timeout);
                 return NULL;
         }
+
+        if (!get_group(ini_file, "device", &config->device, error))
+                return NULL;
 
         return g_steal_pointer(&config);
 }

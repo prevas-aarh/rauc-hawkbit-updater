@@ -1,0 +1,6 @@
+pytest
+attrs
+requests
+pydbus
+pygobject
+pexpect

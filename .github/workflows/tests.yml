@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-21.04
     strategy:
       matrix:
         options:
@@ -21,7 +21,26 @@ jobs:
     - name: Install required packages
       run: |
         sudo apt-get update
-        sudo apt-get install libcurl4-openssl-dev libsystemd-dev libjson-glib-dev
+        sudo apt-get install libcurl4-openssl-dev libsystemd-dev libjson-glib-dev libeconf-dev
+
+    - name: Build (with ${{ matrix.options }})
+      run: |
+        mkdir -p build
+        cd build
+        cmake ${{ matrix.options }} -DQA_BUILD=ON ..
+        make
+        cd -
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.8
+
+    - name: Install test dependencies
+      run: |
+        sudo apt-get install libgirepository1.0-dev python3-virtualenv nginx-full
+        python -m pip install --upgrade pip
+        pip install -r test-requirements.txt
 
     - name: Login to DockerHub
       uses: docker/login-action@v1
@@ -30,27 +49,25 @@ jobs:
         username: ${{ secrets.DOCKER_HUB_USERNAME }}
         password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
-    - name: Build & Test (with ${{ matrix.options }})
+    - name: Update/launch hawkBit docker container
       run: |
-        mkdir -p build
-        cd build
-        cmake ${{ matrix.options }} -DQA_BUILD=ON ..
-        make
-        cd -
         docker pull hawkbit/hawkbit-update-server
         docker run -d --name hawkbit -p 8080:8080 hawkbit/hawkbit-update-server
+
+    - name: Run test suite
+      run: |
         ./test/wait-for-hawkbit-online
-        cd test && ./rauc-hawkbit-updater.t -v
+        dbus-run-session -- pytest -v
 
   docs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-21.04
     steps:
     - uses: actions/checkout@v2
 
     - name: Install required packages
       run: |
         sudo apt-get update
-        sudo apt-get install libcurl4-openssl-dev libjson-glib-dev python3-sphinx python3-sphinx-rtd-theme doxygen
+        sudo apt-get install libcurl4-openssl-dev libjson-glib-dev libeconf-dev python3-sphinx python3-sphinx-rtd-theme doxygen
 
     - name: Build documentation (Sphinx & Doxygen)
       run: |
