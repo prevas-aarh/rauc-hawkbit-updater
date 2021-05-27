@@ -35,6 +35,12 @@ timeout                   = 60
 # reboot after a successful update
 post_update_reboot        = false
 
+# path to client certificate
+client_cert               =
+
+# path to private key of client certificate
+client_key                =
+
 # debug, info, message, critical, error, fatal
 log_level                 = message
 

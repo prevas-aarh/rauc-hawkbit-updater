@@ -36,6 +36,8 @@ Setup target (device) configuration file:
   target_name               = test-target
   auth_token                = bhVahL1Il1shie2aj2poojeChee6ahShu
   #gateway_token            = bhVahL1Il1shie2aj2poojeChee6ahShu
+  #client_cert              = /path/to/client_certificate.pem
+  #client_key               = /path/to/client_certificate.key
   bundle_download_location  = /tmp/bundle.raucb
   retry_wait                = 60
   connect_timeout           = 20
