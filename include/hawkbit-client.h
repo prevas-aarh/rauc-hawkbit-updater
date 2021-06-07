@@ -19,6 +19,7 @@ typedef enum {
         RHU_HAWKBIT_CLIENT_ERROR_ALREADY_IN_PROGRESS,
         RHU_HAWKBIT_CLIENT_ERROR_JSON_RESPONSE_PARSE,
         RHU_HAWKBIT_CLIENT_ERROR_DOWNLOAD,
+        RHU_HAWKBIT_CLIENT_ERROR_CANCELATION,
 } RHUHawkbitClientError;
 
 // uses CURLcode as error codes
@@ -47,12 +48,25 @@ enum HTTPMethod {
         DELETE
 };
 
+enum ActionState {
+        ACTION_STATE_NONE,
+        ACTION_STATE_CANCELED,
+        ACTION_STATE_ERROR,
+        ACTION_STATE_SUCCESS,
+        ACTION_STATE_PROCESSING,
+        ACTION_STATE_DOWNLOADING,
+        ACTION_STATE_INSTALLING,
+        ACTION_STATE_CANCEL_REQUESTED,
+};
+
 /**
  * @brief struct that contains the context of an HawkBit action.
  */
 struct HawkbitAction {
         gchar *id;                    /**< HawkBit action id */
         GMutex mutex;                 /**< mutex used for accessing all other members */
+        enum ActionState state;       /**< state of this action */
+        GCond cond;                   /**< condition on state */
 };
 
 /**

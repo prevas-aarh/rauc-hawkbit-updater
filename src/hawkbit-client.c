@@ -77,7 +77,9 @@ static struct HawkbitAction *action_new(void)
         struct HawkbitAction *action = g_new0(struct HawkbitAction, 1);
 
         g_mutex_init(&action->mutex);
+        g_cond_init(&action->cond);
         action->id = NULL;
+        action->state = ACTION_STATE_NONE;
 
         return action;
 }
@@ -583,6 +585,15 @@ static long json_get_sleeptime(JsonNode *root)
 
         g_return_val_if_fail(root, 0L);
 
+        g_mutex_lock(&active_action->mutex);
+        if (active_action->state == ACTION_STATE_PROCESSING ||
+            active_action->state == ACTION_STATE_DOWNLOADING ||
+            active_action->state == ACTION_STATE_CANCEL_REQUESTED) {
+                g_mutex_unlock(&active_action->mutex);
+                return 5L;
+        }
+        g_mutex_unlock(&active_action->mutex);
+
         sleeptime_str = json_get_string(root, "$.config.polling.sleep", &error);
         if (!sleeptime_str) {
                 g_warning("Polling sleep time not found: %s. Using fallback: %ds",
@@ -665,17 +676,10 @@ static gboolean identify(GError **error)
 }
 
 /**
- * @brief Resets the global active_action->id to NULL, indicating no action in progress, and
- * deletes RAUC bundle at config's bundle_download_location.
- * Must be called under locked active_action->mutex.
+ * @brief Deletes RAUC bundle at config's bundle_download_location.
  */
 static void process_deployment_cleanup()
 {
-        g_assert_false(g_mutex_trylock(&active_action->mutex));
-
-        g_free(active_action->id);
-        active_action->id = NULL;
-
         if (!g_file_test(hawkbit_config->bundle_download_location, G_FILE_TEST_IS_REGULAR))
                 return;
 
@@ -694,6 +698,7 @@ gboolean install_complete_cb(gpointer ptr)
 
         g_mutex_lock(&active_action->mutex);
 
+        active_action->state = result->install_success ? ACTION_STATE_SUCCESS : ACTION_STATE_ERROR;
         feedback_url = build_api_url("deploymentBase/%s/feedback", active_action->id);
         res = feedback(
                 feedback_url, active_action->id,
@@ -742,6 +747,14 @@ static gpointer download_thread(gpointer data)
 
         g_return_val_if_fail(data, NULL);
 
+        g_mutex_lock(&active_action->mutex);
+
+        if (active_action->state == ACTION_STATE_CANCEL_REQUESTED)
+                goto cancel;
+
+        active_action->state = ACTION_STATE_DOWNLOADING;
+        g_mutex_unlock(&active_action->mutex);
+
         g_message("Start downloading: %s", artifact->download_url);
 
         // Download software bundle (artifact)
@@ -750,6 +763,9 @@ static gpointer download_thread(gpointer data)
                 g_prefix_error(&error, "Download failed: ");
                 goto report_err;
         }
+
+        if (active_action->state == ACTION_STATE_CANCEL_REQUESTED)
+                goto cancel;
 
         // notify hawkbit that download is complete
         msg = g_strdup_printf("Download complete. %.2f MB/s",
@@ -775,7 +791,16 @@ static gpointer download_thread(gpointer data)
                 g_warning("%s", error->message);
                 g_clear_error(&error);
         }
+        g_mutex_unlock(&active_action->mutex);
+        // last chance to cancel installation
+        g_mutex_lock(&active_action->mutex);
 
+        if (active_action->state == ACTION_STATE_CANCEL_REQUESTED)
+                goto cancel;
+
+        // start installation, cancelations are impossible now
+        active_action->state = ACTION_STATE_INSTALLING;
+        g_cond_signal(&active_action->cond);
         g_mutex_unlock(&active_action->mutex);
 
         software_ready_cb(&userdata);
@@ -788,7 +813,16 @@ report_err:
                       "closed", &feedback_error))
                 g_warning("%s", feedback_error->message);
 
+        active_action->state = ACTION_STATE_ERROR;
+
+cancel:
+        g_mutex_trylock(&active_action->mutex);
+        if (active_action->state == ACTION_STATE_CANCEL_REQUESTED)
+                active_action->state = ACTION_STATE_CANCELED;
+
         process_deployment_cleanup();
+
+        g_cond_signal(&active_action->cond);
         g_mutex_unlock(&active_action->mutex);
 
         return GINT_TO_POINTER(FALSE);
@@ -815,13 +849,15 @@ static gboolean process_deployment(JsonNode *req_root, GError **error)
         g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
         g_assert_false(g_mutex_trylock(&active_action->mutex));
 
-        if (active_action->id) {
+        if (active_action->state >= ACTION_STATE_PROCESSING) {
                 g_set_error(error, RHU_HAWKBIT_CLIENT_ERROR,
                             RHU_HAWKBIT_CLIENT_ERROR_ALREADY_IN_PROGRESS,
                             "Deployment %s is already in progress.", active_action->id);
                 // no need to tell hawkBit about this
                 return FALSE;
         }
+
+        active_action->state = ACTION_STATE_PROCESSING;
 
         // get deployment URL
         deployment = json_get_string(req_root, "$._links.deploymentBase.href", error);
@@ -835,6 +871,7 @@ static gboolean process_deployment(JsonNode *req_root, GError **error)
         resp_root = json_parser_get_root(json_response_parser);
 
         // remember deployment's action id
+        g_free(active_action->id);
         active_action->id = json_get_string(resp_root, "$.id", error);
         if (!active_action->id)
                 goto error;
@@ -915,10 +952,101 @@ proc_error:
 error:
         // clean up failed deployment
         process_deployment_cleanup();
+        active_action->state = ACTION_STATE_NONE;
 
         return FALSE;
 }
 
+/**
+ * @brief Process hawkBit cancel action described by req_root.
+ *
+ * @param[in]  req_root JsonNode* describing the cancel action
+ * @param[out] error    Error
+ * @return TRUE if cancel action succeeded, FALSE otherwise (error set)
+ */
+static gboolean process_cancel(JsonNode *req_root, GError **error)
+{
+        gboolean res = TRUE;
+        g_autofree gchar *cancel_url = NULL, *feedback_url = NULL, *stop_id = NULL, *msg = NULL;
+        g_autoptr(JsonParser) json_response_parser = NULL;
+        JsonNode *resp_root = NULL;
+
+        g_return_val_if_fail(req_root, FALSE);
+        g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+        // get cancel url
+        cancel_url = json_get_string(req_root, "$._links.cancelAction.href", error);
+        if (!cancel_url)
+                return FALSE;
+
+        // retrieve cancel details
+        if (!rest_request(GET, cancel_url, NULL, &json_response_parser, error))
+                return FALSE;
+
+        resp_root = json_parser_get_root(json_response_parser);
+
+        // retrieve stop id
+        stop_id = json_get_string(resp_root, "$.cancelAction.stopId", error);
+        if (!stop_id)
+                return FALSE;
+
+        g_message("Received cancelation for action %s", stop_id);
+
+        // send cancel feedback
+        feedback_url = build_api_url("cancelAction/%s/feedback", stop_id);
+
+        // cancel action if install not started yet
+        g_mutex_lock(&active_action->mutex);
+        if (!g_strcmp0(stop_id, active_action->id) &&
+            (active_action->state == ACTION_STATE_PROCESSING ||
+             active_action->state == ACTION_STATE_DOWNLOADING)) {
+
+                g_debug("Action %s is in state %d, waiting for cancel request to be processed",
+                        stop_id, active_action->state);
+                active_action->state = ACTION_STATE_CANCEL_REQUESTED;
+
+                while (active_action->state == ACTION_STATE_CANCEL_REQUESTED)
+                        g_cond_wait(&active_action->cond, &active_action->mutex);
+        }
+        if (g_strcmp0(stop_id, active_action->id))
+                active_action->state = ACTION_STATE_NONE;
+
+        // send feedback
+        switch (active_action->state) {
+        case ACTION_STATE_NONE:
+                // action unknown, acknowledge cancelation nonetheless
+                g_debug("Received cancelation for unprocessed action %s, acknowledging.",
+                        stop_id);
+        // fall through
+        case ACTION_STATE_CANCELED:
+                res = feedback(feedback_url, stop_id, "Action canceled.", "success", "closed",
+                               error);
+                break;
+        case ACTION_STATE_SUCCESS:
+                g_debug("Cancelation impossible, installation succeeded already");
+                break;
+        case ACTION_STATE_ERROR:
+                g_debug("Cancelation impossible, installation failed already");
+                break;
+        case ACTION_STATE_INSTALLING:
+                msg = g_strdup("Cancelation impossible, installation started already.");
+                res = feedback(feedback_url, stop_id, msg, "success", "rejected", error);
+                if (res) {
+                        res = FALSE;
+                        g_set_error(error, RHU_HAWKBIT_CLIENT_ERROR,
+                                    RHU_HAWKBIT_CLIENT_ERROR_CANCELATION, "%s", msg);
+                }
+                break;
+        default:
+                // other states are not expected here
+                g_critical("Unexpected action state after cancel request: %d", active_action->state);
+                g_assert_not_reached();
+                break;
+        }
+
+        g_mutex_unlock(&active_action->mutex);
+        return res;
+}
 
 void hawkbit_init(Config *config, GSourceFunc on_install_ready)
 {
@@ -983,9 +1111,6 @@ static gboolean hawkbit_pull_cb(gpointer user_data)
         // owned by the JsonParser and should never be modified or freed
         json_root = json_parser_get_root(json_response_parser);
 
-        // get hawkbit sleep time (how often should we check for new software)
-        data->hawkbit_interval_check_sec = json_get_sleeptime(json_root);
-
         if (json_contains(json_root, "$._links.configData")) {
                 // hawkBit has asked us to identify ourselves
                 res = identify(&error);
@@ -1010,9 +1135,15 @@ static gboolean hawkbit_pull_cb(gpointer user_data)
                 g_message("No new software.");
         }
         if (json_contains(json_root, "$._links.cancelAction")) {
-                //TODO: implement me
-                g_warning("cancel action not supported");
+                res = process_cancel(json_root, &error);
+                if (!res) {
+                        g_warning("%s", error->message);
+                        g_clear_error(&error);
+                }
         }
+
+        // get hawkbit sleep time (how often should we check for new software)
+        data->hawkbit_interval_check_sec = json_get_sleeptime(json_root);
 
 out:
         if (run_once) {
