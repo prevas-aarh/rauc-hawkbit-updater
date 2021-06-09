@@ -15,7 +15,7 @@
 #include "log.h"
 
 #define PROGRAM "rauc-hawkbit-updater"
-#define VERSION 0.1
+#define VERSION 1.0
 
 // program arguments
 static gchar *config_file          = NULL;
