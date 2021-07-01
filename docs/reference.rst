@@ -36,7 +36,9 @@ Configures how to connect to a hawkBit server, etc.
 Mandatory options:
 
 ``hawkbit_server=<host>[:<port>]``
-  The IP or hostname of the hawkbit server to connect to.
+  The IP or hostname of the hawkbit server to connect to
+  (Punycode representation must be used for host names containing Unicode
+  characters).
   The ``port`` can be provided optionally, separated by a colon.
 
 ``target_name=<name>``
